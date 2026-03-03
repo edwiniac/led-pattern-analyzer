@@ -152,6 +152,61 @@ class LEDAnalyzer:
             return 'blink'
         return 'solid'
     
+    def _merge_events(self, events: List[LEDEvent], gap_ms: float = 150) -> List[LEDEvent]:
+        """Merge events of same color that are close together, absorb short blinks."""
+        if len(events) < 2:
+            return events
+        
+        merged = []
+        i = 0
+        
+        while i < len(events):
+            current = events[i]
+            
+            # Look ahead for events to merge
+            j = i + 1
+            while j < len(events):
+                next_evt = events[j]
+                gap = (next_evt.start_sec - current.end_sec) * 1000
+                
+                # Merge if: same color and small gap, OR next is short blink (< 100ms)
+                if gap < gap_ms:
+                    if next_evt.color == current.color:
+                        # Same color - merge
+                        current = LEDEvent(
+                            start_sec=current.start_sec,
+                            end_sec=next_evt.end_sec,
+                            duration_ms=(next_evt.end_sec - current.start_sec) * 1000,
+                            color=current.color,
+                            pattern='fade' if current.pattern == 'fade' or next_evt.pattern == 'fade' else current.pattern
+                        )
+                        j += 1
+                    elif next_evt.duration_ms < 100:
+                        # Short blink of different color - absorb it
+                        # Check if there's another event of current color after
+                        if j + 1 < len(events) and events[j + 1].color == current.color:
+                            k = j + 1
+                            if (events[k].start_sec - current.end_sec) * 1000 < gap_ms * 2:
+                                current = LEDEvent(
+                                    start_sec=current.start_sec,
+                                    end_sec=events[k].end_sec,
+                                    duration_ms=(events[k].end_sec - current.start_sec) * 1000,
+                                    color=current.color,
+                                    pattern='fade'
+                                )
+                                j = k + 1
+                                continue
+                        break
+                    else:
+                        break
+                else:
+                    break
+            
+            merged.append(current)
+            i = j if j > i + 1 else i + 1
+        
+        return merged
+    
     def analyze(self) -> List[LEDEvent]:
         if self.roi is None:
             self.detect_led_roi()
@@ -190,7 +245,8 @@ class LEDAnalyzer:
         if current_color:
             events.append(self._make_event(event_start, self.total_frames-1, current_color, event_pixels))
         
-        return [e for e in events if e and e.duration_ms >= self.MIN_EVENT_MS]
+        events = [e for e in events if e and e.duration_ms >= self.MIN_EVENT_MS]
+        return self._merge_events(events)
     
     def _make_event(self, start: int, end: int, color: str, pixels: List[int]) -> Optional[LEDEvent]:
         start_sec = start / self.fps
