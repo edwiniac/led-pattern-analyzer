@@ -1,13 +1,6 @@
 # LED Pattern Analyzer 💡
 
-Detect LED colors and patterns from video. Designed for smart lock LED indicators.
-
-## Features
-
-- 🎨 **3 Colors**: Red, Green, Blue (robust to lighting variations)
-- ⚡ **3 Patterns**: Blink, Solid, Fade
-- ⏱️ **Timing**: Start, end, duration for each event
-- 📊 **JSON Output**: Clean structured data
+Detect LED colors and patterns from video. Built for smart lock testing.
 
 ## Installation
 
@@ -20,90 +13,72 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-# Analyze video
+# With ROI (recommended for accuracy)
+python led_analyzer.py video.mp4 --roi x,y,width,height
+
+# Auto-detect ROI (may include unwanted areas)
 python led_analyzer.py video.mp4
-
-# Specify output file
-python led_analyzer.py video.mp4 -o results.json
-
-# Filter to specific colors only
-python led_analyzer.py video.mp4 --colors red green
 ```
+
+### Finding the ROI
+
+1. Open your video and find a frame where the LED is ON
+2. Note the LED position: `x,y` = top-left corner
+3. Note the size: `width,height` covering the LED area
+4. Use: `--roi x,y,width,height`
+
+Example: `--roi 400,800,200,400`
 
 ## Output
 
 ```
-==================================================
-LED PATTERN ANALYSIS
-==================================================
+Total events: 21
 
-Video: sample.mp4
-Duration: 30.05s | FPS: 30.0
-
-Total events: 33
-
-By color:
-  RED: 17 events, 12.43s total
-  BLUE: 10 events, 12.03s total
-  GREEN: 6 events, 1.97s total
+  BLUE:  6 events, 11.06s
+  GREEN: 6 events, 2.00s
+  RED:   9 events, 2.60s
 
 Events:
-   1. [  0.00s -   0.13s] RED    solid  (167ms)
+   1. [  1.47s -   3.03s] BLUE   fade   (1599ms)
    2. [  3.20s -   3.46s] GREEN  solid  (300ms)
    3. [  3.50s -   3.76s] RED    solid  (300ms)
    ...
-==================================================
 ```
 
-### JSON Structure
+### JSON Output
 
 ```json
 {
   "video": "sample.mp4",
   "duration_sec": 30.05,
-  "fps": 30.0,
-  "total_events": 33,
+  "total_events": 21,
   "by_color": {
-    "red": {"count": 17, "total_ms": 12430},
-    "green": {"count": 6, "total_ms": 1970},
-    "blue": {"count": 10, "total_ms": 12030}
+    "blue": {"count": 6, "total_ms": 11060},
+    "green": {"count": 6, "total_ms": 2000},
+    "red": {"count": 9, "total_ms": 2600}
   },
   "events": [
-    {
-      "start_sec": 0.0,
-      "end_sec": 0.13,
-      "duration_ms": 167,
-      "color": "red",
-      "pattern": "solid"
-    }
+    {"start_sec": 1.47, "end_sec": 3.03, "duration_ms": 1599, "color": "blue", "pattern": "fade"},
+    {"start_sec": 3.20, "end_sec": 3.46, "duration_ms": 300, "color": "green", "pattern": "solid"}
   ]
 }
 ```
 
-## Color Detection
+## Colors & Patterns
 
-Colors are grouped to handle camera/lighting variance:
+**Colors detected:** RED, GREEN, BLUE (adapts to lighting variations)
 
-| LED Color | Hue Range | Includes |
-|-----------|-----------|----------|
-| **RED** | 0-35° or 150-180° | Orange tones |
-| **GREEN** | 35-85° | Yellow-green |
-| **BLUE** | 85-150° | Cyan tones |
-
-## Pattern Detection
-
-| Pattern | Meaning |
-|---------|---------|
-| `blink` | Short duration (< 150ms) |
-| `solid` | Constant brightness |
-| `fade` | Gradual brightness change |
+**Patterns:**
+- `blink` — short flash (< 150ms)
+- `solid` — constant brightness
+- `fade` — gradual change
 
 ## Tips
 
-- Works with any LED shape (circular, strip, ring, etc.)
-- 30+ FPS recommended for accurate timing
-- Stable camera = better results
-- Use `--colors` to filter expected colors
+- Use manual `--roi` for best accuracy
+- Keep camera stable during recording
+- 30+ FPS recommended
+- Works with any LED shape
 
 ## License
 

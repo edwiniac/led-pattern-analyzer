@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
-LED Pattern Analyzer
-====================
-Detects LED colors and patterns from video.
-Outputs clean, focused LED event data.
-
-Author: Edwin Isac
-License: MIT
+LED Pattern Analyzer - Detects LED colors and patterns from video.
 """
 
 import cv2
@@ -19,37 +13,22 @@ from pathlib import Path
 
 @dataclass
 class LEDEvent:
-    """A single LED event."""
     start_sec: float
     end_sec: float
     duration_ms: float
     color: str
-    pattern: str  # 'blink', 'solid', 'fade'
+    pattern: str
 
 
 class LEDAnalyzer:
-    """Analyzes LED patterns in video."""
+    BRIGHTNESS_THRESHOLD = 200
+    SATURATION_THRESHOLD = 60
+    MIN_PIXELS = 100
+    MIN_EVENT_MS = 25
     
-    # Detection thresholds
-    BRIGHTNESS_THRESHOLD = 200  # V channel
-    SATURATION_THRESHOLD = 60   # S channel - filters out white/ambient
-    MIN_PIXELS = 200            # Minimum LED pixels to be "on"
-    MIN_EVENT_MS = 25           # Ignore events shorter than this
-    BLINK_THRESHOLD_MS = 80     # Faster than this = blink
-    
-    def __init__(self, video_path: str, colors: List[str] = None):
-        """
-        Initialize analyzer.
-        
-        Args:
-            video_path: Path to video file
-            colors: Expected colors to detect (e.g., ['red', 'green']). 
-                   If None, detects all colors.
-        """
+    def __init__(self, video_path: str):
         self.video_path = video_path
-        self.expected_colors = colors
         self.cap = cv2.VideoCapture(video_path)
-        
         if not self.cap.isOpened():
             raise ValueError(f"Cannot open video: {video_path}")
         
@@ -57,17 +36,80 @@ class LEDAnalyzer:
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.duration_sec = self.total_frames / self.fps
+        self.roi = None
+    
+    def detect_led_roi(self) -> Tuple[int, int, int, int]:
+        """
+        Find LED by looking for the region with most brightness CHANGES.
+        LED turns on/off, ambient lights stay constant.
+        """
+        print("Detecting LED region (looking for brightness changes)...")
+        
+        sample_indices = np.linspace(0, self.total_frames - 1, 60, dtype=int)
+        grid_size = 50
+        
+        # Track brightness per grid cell across frames
+        grid_brightness = {}  # {(y,x): [brightness values]}
+        
+        for idx in sample_indices:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+            
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            v = hsv[:, :, 2]
+            s = hsv[:, :, 1]
+            
+            # Check each grid cell
+            for gy in range(0, self.height, grid_size):
+                for gx in range(0, self.width, grid_size):
+                    cell = v[gy:gy+grid_size, gx:gx+grid_size]
+                    sat_cell = s[gy:gy+grid_size, gx:gx+grid_size]
+                    
+                    # Only consider cells that sometimes have saturated bright pixels
+                    bright_sat = np.sum((cell > 200) & (sat_cell > 50))
+                    
+                    key = (gy // grid_size, gx // grid_size)
+                    if key not in grid_brightness:
+                        grid_brightness[key] = []
+                    grid_brightness[key].append(bright_sat)
+        
+        # Find cells with HIGH VARIANCE (LED turns on/off)
+        cell_variance = {}
+        for key, values in grid_brightness.items():
+            if max(values) > 10:  # Must have some bright frames
+                cell_variance[key] = np.std(values)
+        
+        if not cell_variance:
+            print("Warning: No LED detected, using center region")
+            self.roi = (self.width//4, self.height//4, self.width//2, self.height//2)
+            return self.roi
+        
+        # Get top cells by variance
+        sorted_cells = sorted(cell_variance.keys(), key=lambda k: cell_variance[k], reverse=True)
+        top_cells = sorted_cells[:5]  # Top 5 most variable cells
+        
+        # Build ROI
+        y_cells = [c[0] for c in top_cells]
+        x_cells = [c[1] for c in top_cells]
+        
+        padding = 1
+        y_min = max(0, (min(y_cells) - padding) * grid_size)
+        y_max = min(self.height, (max(y_cells) + padding + 1) * grid_size)
+        x_min = max(0, (min(x_cells) - padding) * grid_size)
+        x_max = min(self.width, (max(x_cells) + padding + 1) * grid_size)
+        
+        self.roi = (int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
+        print(f"LED ROI: x={x_min}, y={y_min}, w={x_max-x_min}, h={y_max-y_min}")
+        
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        return self.roi
+    
+    def set_roi(self, x: int, y: int, w: int, h: int):
+        self.roi = (x, y, w, h)
     
     def _classify_color(self, hue: float) -> str:
-        """
-        Classify color from HSV hue (0-180 scale).
-        
-        Simplified to 3 primary LED colors:
-        - RED: hue 0-35 or 150-180 (includes orange tones)
-        - GREEN: hue 35-85
-        - BLUE: hue 85-150 (includes cyan)
-        """
         if hue < 35 or hue > 150:
             return 'red'
         elif hue < 85:
@@ -76,70 +118,39 @@ class LEDAnalyzer:
             return 'blue'
     
     def _get_led_state(self, frame: np.ndarray) -> Tuple[bool, Optional[str], int]:
-        """
-        Get LED state from a frame.
+        x, y, w, h = self.roi
+        roi = frame[y:y+h, x:x+w]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        h_ch, s_ch, v_ch = cv2.split(hsv)
         
-        Returns: (is_on, color, bright_pixel_count)
-        """
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        h, s, v = cv2.split(hsv)
-        
-        # LED mask: bright AND saturated (filters ambient light)
-        led_mask = (v > self.BRIGHTNESS_THRESHOLD) & (s > self.SATURATION_THRESHOLD)
-        pixel_count = np.sum(led_mask)
+        mask = (v_ch > self.BRIGHTNESS_THRESHOLD) & (s_ch > self.SATURATION_THRESHOLD)
+        pixel_count = np.sum(mask)
         
         if pixel_count < self.MIN_PIXELS:
             return False, None, pixel_count
         
-        # Get dominant color
-        hue = np.median(h[led_mask])
-        color = self._classify_color(hue)
-        
-        # Filter to expected colors if specified
-        if self.expected_colors and color not in self.expected_colors:
-            # Try to map to nearest expected color
-            if 'red' in self.expected_colors and (hue < 30 or hue > 150):
-                color = 'red'
-            elif 'green' in self.expected_colors and 35 <= hue <= 85:
-                color = 'green'
-            elif 'blue' in self.expected_colors and 85 < hue < 130:
-                color = 'blue'
-            else:
-                return False, None, pixel_count
-        
-        return True, color, pixel_count
+        hue = np.median(h_ch[mask])
+        return True, self._classify_color(hue), pixel_count
     
-    def _classify_pattern(self, pixel_counts: List[int], duration_ms: float) -> str:
-        """Classify pattern based on brightness profile."""
-        if len(pixel_counts) < 2:
+    def _classify_pattern(self, pixels: List[int], duration_ms: float) -> str:
+        if len(pixels) < 2:
             return 'blink'
-        
-        # Check variance
-        std = np.std(pixel_counts)
-        mean = np.mean(pixel_counts)
-        cv = std / mean if mean > 0 else 0
-        
-        if cv > 0.3:  # High variance = fade
+        cv = np.std(pixels) / np.mean(pixels) if np.mean(pixels) > 0 else 0
+        if cv > 0.3:
             return 'fade'
-        elif duration_ms < 150:  # Short = blink
+        elif duration_ms < 150:
             return 'blink'
-        else:
-            return 'solid'
+        return 'solid'
     
     def analyze(self) -> List[LEDEvent]:
-        """
-        Analyze video and return LED events.
+        if self.roi is None:
+            self.detect_led_roi()
         
-        Returns: List of LEDEvent objects
-        """
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        
         events = []
         current_color = None
-        event_start_frame = None
+        event_start = None
         event_pixels = []
-        
-        print(f"Analyzing {self.total_frames} frames...")
         
         for frame_num in range(self.total_frames):
             ret, frame = self.cap.read()
@@ -150,141 +161,91 @@ class LEDAnalyzer:
             
             if is_on:
                 if current_color is None:
-                    # Start new event
                     current_color = color
-                    event_start_frame = frame_num
+                    event_start = frame_num
                     event_pixels = [pixels]
                 elif color == current_color:
-                    # Continue event
                     event_pixels.append(pixels)
                 else:
-                    # Color changed - save current, start new
-                    event = self._create_event(
-                        event_start_frame, frame_num - 1, 
-                        current_color, event_pixels
-                    )
-                    if event:
-                        events.append(event)
-                    
+                    events.append(self._make_event(event_start, frame_num-1, current_color, event_pixels))
                     current_color = color
-                    event_start_frame = frame_num
+                    event_start = frame_num
                     event_pixels = [pixels]
             else:
-                if current_color is not None:
-                    # End event
-                    event = self._create_event(
-                        event_start_frame, frame_num - 1,
-                        current_color, event_pixels
-                    )
-                    if event:
-                        events.append(event)
-                    
+                if current_color:
+                    events.append(self._make_event(event_start, frame_num-1, current_color, event_pixels))
                     current_color = None
                     event_pixels = []
         
-        # Handle event at end
-        if current_color is not None:
-            event = self._create_event(
-                event_start_frame, self.total_frames - 1,
-                current_color, event_pixels
-            )
-            if event:
-                events.append(event)
+        if current_color:
+            events.append(self._make_event(event_start, self.total_frames-1, current_color, event_pixels))
         
-        print(f"Found {len(events)} LED events")
-        return events
+        return [e for e in events if e and e.duration_ms >= self.MIN_EVENT_MS]
     
-    def _create_event(self, start_frame: int, end_frame: int, 
-                      color: str, pixels: List[int]) -> Optional[LEDEvent]:
-        """Create an event from frame range."""
-        start_sec = start_frame / self.fps
-        end_sec = end_frame / self.fps
+    def _make_event(self, start: int, end: int, color: str, pixels: List[int]) -> Optional[LEDEvent]:
+        start_sec = start / self.fps
+        end_sec = end / self.fps
         duration_ms = (end_sec - start_sec) * 1000 + (1000 / self.fps)
-        
-        if duration_ms < self.MIN_EVENT_MS:
-            return None
-        
-        pattern = self._classify_pattern(pixels, duration_ms)
-        
         return LEDEvent(
             start_sec=round(start_sec, 3),
             end_sec=round(end_sec, 3),
             duration_ms=round(duration_ms, 1),
             color=color,
-            pattern=pattern
+            pattern=self._classify_pattern(pixels, duration_ms)
         )
     
     def close(self):
         self.cap.release()
 
 
-def analyze_video(video_path: str, colors: List[str] = None, 
-                  output_path: str = None) -> dict:
-    """
-    Main analysis function.
+def analyze_video(video_path: str, output_path: str = None, roi: str = None) -> dict:
+    analyzer = LEDAnalyzer(video_path)
     
-    Args:
-        video_path: Path to video
-        colors: Expected colors (e.g., ['red', 'green'])
-        output_path: Optional JSON output path
+    if roi:
+        x, y, w, h = map(int, roi.split(','))
+        analyzer.set_roi(x, y, w, h)
     
-    Returns:
-        Analysis results dict
-    """
-    analyzer = LEDAnalyzer(video_path, colors=colors)
     events = analyzer.analyze()
     
-    # Build results
     results = {
         'video': video_path,
-        'duration_sec': round(analyzer.duration_sec, 2),
+        'duration_sec': round(analyzer.total_frames / analyzer.fps, 2),
         'fps': round(analyzer.fps, 1),
+        'roi': [int(x) for x in analyzer.roi],
         'total_events': len(events),
-        'events': [
-            {
-                'start_sec': e.start_sec,
-                'end_sec': e.end_sec,
-                'duration_ms': e.duration_ms,
-                'color': e.color,
-                'pattern': e.pattern
-            }
-            for e in events
-        ]
+        'events': [{'start_sec': e.start_sec, 'end_sec': e.end_sec, 'duration_ms': e.duration_ms, 
+                    'color': e.color, 'pattern': e.pattern} for e in events]
     }
     
-    # Summary by color
-    color_stats = {}
+    # Summary
+    by_color = {}
     for e in events:
-        if e.color not in color_stats:
-            color_stats[e.color] = {'count': 0, 'total_ms': 0}
-        color_stats[e.color]['count'] += 1
-        color_stats[e.color]['total_ms'] += e.duration_ms
-    results['by_color'] = color_stats
+        if e.color not in by_color:
+            by_color[e.color] = {'count': 0, 'total_ms': 0}
+        by_color[e.color]['count'] += 1
+        by_color[e.color]['total_ms'] += e.duration_ms
+    results['by_color'] = by_color
     
-    # Print summary
-    print("\n" + "=" * 50)
-    print("LED PATTERN ANALYSIS")
-    print("=" * 50)
-    print(f"\nVideo: {video_path}")
-    print(f"Duration: {analyzer.duration_sec:.2f}s | FPS: {analyzer.fps:.1f}")
-    print(f"\nTotal events: {len(events)}")
+    # Print
+    print(f"\n{'='*50}\nLED PATTERN ANALYSIS\n{'='*50}")
+    print(f"Video: {video_path}")
+    print(f"Duration: {results['duration_sec']}s | FPS: {results['fps']}")
+    print(f"ROI: {analyzer.roi}")
+    print(f"\nTotal events: {len(events)}\n")
     
-    print("\nBy color:")
-    for color, stats in color_stats.items():
-        print(f"  {color.upper()}: {stats['count']} events, {stats['total_ms']/1000:.2f}s total")
+    for color, stats in by_color.items():
+        print(f"  {color.upper()}: {stats['count']} events, {stats['total_ms']/1000:.2f}s")
     
-    print("\nEvents:")
+    print(f"\nEvents:")
     for i, e in enumerate(events, 1):
-        print(f"  {i:2d}. [{e.start_sec:6.2f}s - {e.end_sec:6.2f}s] "
-              f"{e.color.upper():6s} {e.pattern:6s} ({e.duration_ms:.0f}ms)")
+        print(f"  {i:2d}. [{e.start_sec:6.2f}s - {e.end_sec:6.2f}s] {e.color.upper():6s} {e.pattern:6s} ({e.duration_ms:.0f}ms)")
     
-    print("=" * 50)
+    print('='*50)
     
-    # Save JSON
     if output_path:
         with open(output_path, 'w') as f:
             json.dump(results, f, indent=2)
-        print(f"\nSaved: {output_path}")
+        print(f"Saved: {output_path}")
     
     analyzer.close()
     return results
@@ -292,29 +253,14 @@ def analyze_video(video_path: str, colors: List[str] = None,
 
 def main():
     import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='Analyze LED patterns in video',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python led_analyzer.py video.mp4
-  python led_analyzer.py video.mp4 --colors red green
-  python led_analyzer.py video.mp4 -o results.json
-        """
-    )
-    parser.add_argument('video', help='Video file path')
-    parser.add_argument('-o', '--output', help='Output JSON path')
-    parser.add_argument('--colors', nargs='+', 
-                        help='Expected colors (e.g., red green)')
-    
+    parser = argparse.ArgumentParser(description='Analyze LED patterns in video')
+    parser.add_argument('video', help='Video file')
+    parser.add_argument('-o', '--output', help='Output JSON')
+    parser.add_argument('--roi', help='Manual ROI: x,y,w,h')
     args = parser.parse_args()
     
-    output = args.output
-    if not output:
-        output = str(Path(args.video).with_suffix('.json'))
-    
-    analyze_video(args.video, colors=args.colors, output_path=output)
+    output = args.output or str(Path(args.video).with_suffix('.json'))
+    analyze_video(args.video, output, args.roi)
 
 
 if __name__ == '__main__':
