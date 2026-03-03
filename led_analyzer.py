@@ -109,34 +109,38 @@ class LEDAnalyzer:
     def set_roi(self, x: int, y: int, w: int, h: int):
         self.roi = (x, y, w, h)
     
-    def _classify_color(self, hue: float, saturation: float) -> str:
-        # White = low saturation
-        if saturation < 50:
+    def _classify_color_rgb(self, r: float, g: float, b: float) -> str:
+        # White = RGB balanced AND very bright (min > 210)
+        rgb_range = max(r, g, b) - min(r, g, b)
+        if rgb_range < 35 and min(r, g, b) > 210:
             return 'white'
-        # Colored LEDs
-        if hue < 35 or hue > 150:
-            return 'red'
-        elif hue < 85:
+        # Colored - which channel dominates?
+        if b > r and b > g:
+            return 'blue'
+        elif g > r and g > b:
             return 'green'
         else:
-            return 'blue'
+            return 'red'
     
     def _get_led_state(self, frame: np.ndarray) -> Tuple[bool, Optional[str], int]:
         x, y, w, h = self.roi
         roi = frame[y:y+h, x:x+w]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        h_ch, s_ch, v_ch = cv2.split(hsv)
+        v_ch = hsv[:, :, 2]
         
-        # Bright pixels (LED on) - include both saturated AND white
+        # Bright pixels (LED on)
         bright_mask = v_ch > self.BRIGHTNESS_THRESHOLD
         pixel_count = np.sum(bright_mask)
         
         if pixel_count < self.MIN_PIXELS:
             return False, None, pixel_count
         
-        hue = np.median(h_ch[bright_mask])
-        sat = np.median(s_ch[bright_mask])
-        return True, self._classify_color(hue, sat), pixel_count
+        # Get median RGB of bright pixels
+        b = np.median(roi[:, :, 0][bright_mask])
+        g = np.median(roi[:, :, 1][bright_mask])
+        r = np.median(roi[:, :, 2][bright_mask])
+        
+        return True, self._classify_color_rgb(r, g, b), pixel_count
     
     def _classify_pattern(self, pixels: List[int], duration_ms: float) -> str:
         if len(pixels) < 2:
