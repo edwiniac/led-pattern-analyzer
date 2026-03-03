@@ -109,7 +109,11 @@ class LEDAnalyzer:
     def set_roi(self, x: int, y: int, w: int, h: int):
         self.roi = (x, y, w, h)
     
-    def _classify_color(self, hue: float) -> str:
+    def _classify_color(self, hue: float, saturation: float) -> str:
+        # White = low saturation
+        if saturation < 50:
+            return 'white'
+        # Colored LEDs
         if hue < 35 or hue > 150:
             return 'red'
         elif hue < 85:
@@ -123,14 +127,16 @@ class LEDAnalyzer:
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         h_ch, s_ch, v_ch = cv2.split(hsv)
         
-        mask = (v_ch > self.BRIGHTNESS_THRESHOLD) & (s_ch > self.SATURATION_THRESHOLD)
-        pixel_count = np.sum(mask)
+        # Bright pixels (LED on) - include both saturated AND white
+        bright_mask = v_ch > self.BRIGHTNESS_THRESHOLD
+        pixel_count = np.sum(bright_mask)
         
         if pixel_count < self.MIN_PIXELS:
             return False, None, pixel_count
         
-        hue = np.median(h_ch[mask])
-        return True, self._classify_color(hue), pixel_count
+        hue = np.median(h_ch[bright_mask])
+        sat = np.median(s_ch[bright_mask])
+        return True, self._classify_color(hue, sat), pixel_count
     
     def _classify_pattern(self, pixels: List[int], duration_ms: float) -> str:
         if len(pixels) < 2:
