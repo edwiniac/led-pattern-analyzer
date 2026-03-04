@@ -229,8 +229,9 @@ class LEDAnalyzer:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             h, s, v = cv2.split(hsv)
             
-            # LED detection mask: bright AND (saturated OR very bright white)
-            led_mask = ((v > self.bright_threshold) & (s > 30)) | (v > 240)
+            # LED detection mask: bright AND saturated (excludes white cards/hands)
+            # High saturation threshold (100) filters out low-saturation objects
+            led_mask = (v > self.bright_threshold) & (s > 100)
             
             # Morphological cleanup to remove noise
             kernel = np.ones((3, 3), np.uint8)
@@ -318,20 +319,24 @@ class LEDAnalyzer:
             ambient + 40  # At least 40 above ambient
         )
         
-        # Count bright pixels
+        # Count bright AND saturated pixels (filters out white cards/reflections)
+        # MIN_LED_SATURATION = 60 excludes low-saturation objects like white cards
+        MIN_LED_SATURATION = 60
         bright_mask = v_ch > adaptive_threshold
-        bright_pixel_count = np.sum(bright_mask)
+        saturated_mask = s_ch > MIN_LED_SATURATION
+        led_mask = bright_mask & saturated_mask
+        bright_pixel_count = np.sum(led_mask)
         
         # Max brightness
         max_brightness = np.max(v_ch) / 255.0
         
-        # LED is "on" if enough bright pixels above adaptive threshold
+        # LED is "on" if enough bright AND saturated pixels
         is_on = bright_pixel_count >= self.min_bright_pixels
         
-        if is_on and np.any(bright_mask):
-            # Get dominant hue and saturation of bright pixels
-            hue = np.median(h_ch[bright_mask])
-            saturation = np.median(s_ch[bright_mask])
+        if is_on and np.any(led_mask):
+            # Get dominant hue and saturation of LED pixels
+            hue = np.median(h_ch[led_mask])
+            saturation = np.median(s_ch[led_mask])
             color = self.classify_color(hue, saturation, max_brightness)
         else:
             hue = 0
