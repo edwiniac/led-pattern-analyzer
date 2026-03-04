@@ -1044,6 +1044,9 @@ def main():
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress detailed output, just show pattern')
     parser.add_argument('--roi', help='Manual ROI as x,y,w,h')
+    parser.add_argument('--ai-detect', action='store_true',
+                        help='Use AI (OWL-ViT) for LED detection')
+    parser.add_argument('--yolo-model', help='Path to custom YOLO model for detection')
     parser.add_argument('--threshold', '-t', type=int, default=200,
                         help='Min bright pixels for LED on (default: 200)')
     
@@ -1055,6 +1058,30 @@ def main():
     if args.roi:
         x, y, w, h = map(int, args.roi.split(','))
         analyzer.set_roi(x, y, w, h)
+    elif args.ai_detect or args.yolo_model:
+        # Use AI-based LED detection
+        try:
+            from led_detector import OWLViTDetector, YOLODetector, HybridDetector
+            
+            if args.yolo_model:
+                detector = YOLODetector(model_path=args.yolo_model)
+            elif args.ai_detect:
+                detector = HybridDetector(use_ai=True)
+            else:
+                detector = HybridDetector(use_ai=False)
+            
+            print("🤖 Using AI for LED detection...")
+            detections = detector.detect_in_video(args.video, sample_frames=15)
+            
+            if detections:
+                # Use the highest confidence detection
+                best = max(detections, key=lambda d: d.confidence)
+                analyzer.set_roi(best.x, best.y, best.w, best.h)
+                print(f"   AI detected LED at: x={best.x}, y={best.y}, w={best.w}, h={best.h} (conf={best.confidence:.2f})")
+            else:
+                print("   AI detection found nothing, falling back to CV")
+        except ImportError as e:
+            print(f"   AI detection unavailable ({e}), using CV")
     
     analyzer.analyze_video()
     result = analyzer.generate_report()

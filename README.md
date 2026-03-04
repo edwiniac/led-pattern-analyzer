@@ -73,7 +73,59 @@ python led_analyzer.py video.mp4 --annotate
 | `-a, --annotate` | Create annotated video with LED labels |
 | `-o, --output` | Output JSON path |
 | `--roi x,y,w,h` | Manual region of interest |
+| `--ai-detect` | Use AI (OWL-ViT) for auto LED detection |
+| `--yolo-model PATH` | Use custom YOLO model for detection |
 | `-t, --threshold` | Min bright pixels for LED on (default: 200) |
+
+---
+
+## 🤖 AI-Powered LED Detection
+
+For new device types, use AI to auto-detect LED regions:
+
+### Zero-shot Detection (No Training)
+```bash
+# Install dependencies
+pip install transformers torch
+
+# Use OWL-ViT for auto-detection
+python led_analyzer.py video.mp4 --ai-detect --minimal
+```
+
+### Train Custom YOLO Model (Better Accuracy)
+
+```bash
+# 1. Setup dataset structure
+python led_detector.py train --setup --data-dir my_led_dataset
+
+# 2. Auto-annotate from existing videos (review & correct!)
+python led_detector.py annotate video1.mp4 --prefix lock1 --data-dir my_led_dataset
+python led_detector.py annotate video2.mp4 --prefix lock2 --data-dir my_led_dataset
+
+# 3. Train YOLO
+pip install ultralytics
+python led_detector.py train --data-dir my_led_dataset --epochs 50
+
+# 4. Use trained model
+python led_analyzer.py video.mp4 --yolo-model runs/detect/led_detector/weights/best.pt
+```
+
+### Detection Methods
+
+| Method | Speed | Accuracy | Training Needed |
+|--------|-------|----------|-----------------|
+| CV (default) | ⚡ Fast | Good for known devices | No |
+| OWL-ViT | 🐢 Slow | Good zero-shot | No |
+| YOLO (custom) | ⚡ Fast | Best | Yes (50+ images) |
+
+### LED Detector CLI
+
+```bash
+# Detect LED regions in video
+python led_detector.py detect video.mp4 --method hybrid --visualize
+
+# Methods: cv, owlvit, yolo, hybrid
+```
 
 ## How It Works
 
