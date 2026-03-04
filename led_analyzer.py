@@ -910,6 +910,69 @@ class LEDAnalyzer:
         
         print(f"\n💾 Exported to: {output_path}")
     
+    def generate_pattern_string(self, events: List[LEDEvent]) -> str:
+        """Generate compact pattern string like 'GREEN×5(137ms) → GREEN(512ms) → RED(307ms)'"""
+        if not events:
+            return ""
+        
+        groups = []
+        i = 0
+        while i < len(events):
+            color = events[i].color.upper()
+            duration = events[i].duration_ms
+            count = 1
+            
+            # Count consecutive same-color, similar-duration events
+            j = i + 1
+            while j < len(events):
+                if events[j].color.upper() != color:
+                    break
+                # Similar duration = within 50%
+                if not (0.5 <= events[j].duration_ms / duration <= 1.5):
+                    break
+                count += 1
+                j += 1
+            
+            # Format duration
+            if duration >= 1000:
+                dur_str = f"{duration/1000:.1f}s"
+            else:
+                dur_str = f"{int(duration)}ms"
+            
+            if count > 1:
+                groups.append(f"{color}×{count}({dur_str})")
+            else:
+                groups.append(f"{color}({dur_str})")
+            
+            i = j
+        
+        return " → ".join(groups)
+    
+    def export_minimal_json(self, result: AnalysisResult, output_path: str):
+        """Export minimal, easy-to-extract JSON format."""
+        events = result.events
+        pattern_string = self.generate_pattern_string(events)
+        
+        data = {
+            "sequence": [e.color for e in events],
+            "pattern": pattern_string,
+            "duration_sec": round(result.duration_ms / 1000, 2),
+            "events": [
+                {
+                    "t": round(e.start_ms / 1000, 2),
+                    "color": e.color,
+                    "ms": int(round(e.duration_ms))
+                }
+                for e in events
+            ]
+        }
+        
+        with open(output_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        print(f"\n💾 Exported (minimal): {output_path}")
+        print(f"   Pattern: {pattern_string}")
+    
     def create_annotated_video(self, result: AnalysisResult, output_path: str):
         """Create video with LED state annotations."""
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -971,13 +1034,18 @@ class LEDAnalyzer:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='Analyze LED patterns in video (v3 - adaptive lighting)')
+    parser = argparse.ArgumentParser(description='Analyze LED patterns in video')
     parser.add_argument('video', help='Path to input video')
     parser.add_argument('--output', '-o', help='Output JSON path')
-    parser.add_argument('--annotate', '-a', help='Create annotated video', action='store_true')
+    parser.add_argument('--minimal', '-m', action='store_true',
+                        help='Output minimal JSON (easy to extract)')
+    parser.add_argument('--annotate', '-a', action='store_true',
+                        help='Create annotated video')
+    parser.add_argument('--quiet', '-q', action='store_true',
+                        help='Suppress detailed output, just show pattern')
     parser.add_argument('--roi', help='Manual ROI as x,y,w,h')
     parser.add_argument('--threshold', '-t', type=int, default=200,
-                        help='Base min bright pixels for LED on (default: 200)')
+                        help='Min bright pixels for LED on (default: 200)')
     
     args = parser.parse_args()
     
@@ -990,17 +1058,27 @@ def main():
     
     analyzer.analyze_video()
     result = analyzer.generate_report()
-    analyzer.print_report(result)
     
-    if args.output:
-        analyzer.export_json(result, args.output)
+    # Print report (unless quiet mode)
+    if not args.quiet:
+        analyzer.print_report(result)
     else:
-        video_path = Path(args.video)
-        json_path = video_path.with_suffix('.json')
-        analyzer.export_json(result, str(json_path))
+        # In quiet mode, just print the pattern
+        pattern = analyzer.generate_pattern_string(result.events)
+        print(f"\n{pattern}\n")
     
+    # Determine output path
+    video_path = Path(args.video)
+    output_path = args.output if args.output else str(video_path.with_suffix('.json'))
+    
+    # Export JSON (minimal or full)
+    if args.minimal:
+        analyzer.export_minimal_json(result, output_path)
+    else:
+        analyzer.export_json(result, output_path)
+    
+    # Create annotated video if requested
     if args.annotate:
-        video_path = Path(args.video)
         annotated_path = video_path.parent / f"{video_path.stem}_annotated.mp4"
         analyzer.create_annotated_video(result, str(annotated_path))
     
