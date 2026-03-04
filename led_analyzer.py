@@ -85,15 +85,15 @@ class LEDAnalyzer:
     # Temporal smoothing window (frames) - keep small to preserve transitions
     SMOOTHING_WINDOW = 2
     
-    # Color classification with wider tolerance for LEDs
-    # LED "red" often appears in hue 0-22 range due to camera/sensor characteristics
-    # LED "green" often shifts toward cyan (hue 50-105) due to camera white balance
+    # Color classification tuned for LED colors
+    # Orange LEDs typically have hue 10-25 (amber/orange glow)
+    # Red LEDs are more pure red (hue 0-10 or 170-180)
     COLOR_RANGES = {
-        'red': [(0, 22), (170, 180)],  # Red wraps around, expanded for LED red
-        'orange': [(22, 35)],  # Narrower orange band
-        'yellow': [(35, 50)],
-        'green': [(50, 105)],  # Extended to include cyan-ish greens (LED green often looks cyan)
-        'blue': [(105, 135)],
+        'red': [(0, 10), (170, 180)],  # Pure red (narrow)
+        'orange': [(10, 30)],  # Orange/amber LEDs (hue ~14-25)
+        'yellow': [(30, 45)],
+        'green': [(45, 100)],  # Green LEDs (includes cyan-ish greens)
+        'blue': [(100, 135)],
         'magenta': [(135, 170)],
     }
     
