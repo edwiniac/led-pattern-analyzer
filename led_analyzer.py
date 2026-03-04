@@ -292,6 +292,14 @@ def analyze_video(video_path: str, output_path: str = None, roi: str = None) -> 
         by_color[e.color]['total_ms'] += e.duration_ms
     results['by_color'] = by_color
     
+    # Pattern sequence
+    results['pattern_sequence'] = [
+        f"{e.color}-{e.pattern}({e.duration_ms:.0f}ms)" for e in events
+    ]
+    results['pattern_compact'] = " → ".join([
+        f"{e.color[0].upper()}-{e.pattern[0]}" for e in events
+    ])
+    
     # Print
     print(f"\n{'='*50}\nLED PATTERN ANALYSIS\n{'='*50}")
     print(f"Video: {video_path}")
@@ -305,6 +313,33 @@ def analyze_video(video_path: str, output_path: str = None, roi: str = None) -> 
     print(f"\nEvents:")
     for i, e in enumerate(events, 1):
         print(f"  {i:2d}. [{e.start_sec:6.2f}s - {e.end_sec:6.2f}s] {e.color.upper():6s} {e.pattern:6s} ({e.duration_ms:.0f}ms)")
+    
+    # Generate pattern sequence string
+    print(f"\n{'='*50}")
+    print("PATTERN SEQUENCE")
+    print('='*50)
+    
+    # Compact format: color-pattern (duration)
+    pattern_parts = []
+    for e in events:
+        duration_str = f"{e.duration_ms:.0f}ms" if e.duration_ms < 1000 else f"{e.duration_ms/1000:.1f}s"
+        pattern_parts.append(f"{e.color}-{e.pattern}({duration_str})")
+    
+    # Print in readable lines
+    line = ""
+    for i, part in enumerate(pattern_parts):
+        if len(line) + len(part) > 70:
+            print(line)
+            line = part
+        else:
+            line = line + " → " + part if line else part
+    if line:
+        print(line)
+    
+    # Also print ultra-compact version
+    print(f"\nCompact: ", end="")
+    compact = " → ".join([f"{e.color[0].upper()}-{e.pattern[0]}" for e in events])
+    print(compact)
     
     print('='*50)
     
