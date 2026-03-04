@@ -87,12 +87,12 @@ class LEDAnalyzer:
     
     # Color classification with wider tolerance for LEDs
     # LED "red" often appears in hue 0-22 range due to camera/sensor characteristics
+    # LED "green" often shifts toward cyan (hue 50-105) due to camera white balance
     COLOR_RANGES = {
         'red': [(0, 22), (170, 180)],  # Red wraps around, expanded for LED red
         'orange': [(22, 35)],  # Narrower orange band
         'yellow': [(35, 50)],
-        'green': [(50, 90)],
-        'cyan': [(90, 105)],
+        'green': [(50, 105)],  # Extended to include cyan-ish greens (LED green often looks cyan)
         'blue': [(105, 135)],
         'magenta': [(135, 170)],
     }
@@ -270,22 +270,32 @@ class LEDAnalyzer:
         """
         Classify color from HSV values with improved handling of edge cases.
         Prioritizes detecting actual colors over white.
+        Green LEDs often appear desaturated and cyan-shifted - use wider hue range and lower sat threshold.
         """
+        # Check for green first with lower saturation threshold (LEDs often look pale/cyan-green)
+        # Extended range 50-105 to catch cyan-ish greens
+        if 50 <= hue < 105 and saturation >= 12:
+            return 'green'
+        
+        # Check for blue (distinct from green-cyan)
+        if 105 <= hue < 135 and saturation >= 15:
+            return 'blue'
+        
         # Only classify as white if very low saturation
-        if saturation < 25:
+        if saturation < 15:
             return 'white'
         
         # Standard hue-based classification - prioritize color detection
         for color, ranges in self.COLOR_RANGES.items():
             for low, high in ranges:
                 if low <= hue < high:
-                    # For low saturation (25-50), only return color if it's strong
-                    if saturation < 50 and color in ['cyan', 'magenta']:
-                        continue  # These are harder to distinguish at low saturation
+                    # For low saturation (15-40), skip hard-to-distinguish colors
+                    if saturation < 40 and color == 'magenta':
+                        continue
                     return color
         
         # If saturation is moderate but no color matched, it's likely white
-        if saturation < 50:
+        if saturation < 40:
             return 'white'
         
         return 'white'  # Default fallback
